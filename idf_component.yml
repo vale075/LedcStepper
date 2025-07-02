@@ -1,0 +1,6 @@
+dependencies:
+  idf:
+    version: '>=5.4'
+description: 'LedcStepper: ESP32 library for efficiently controlling steppers using the Ledc interface coupled with PCNT counters'
+url: https://github.com/vale075/LedcStepper
+version: 0.0.1-pre1
