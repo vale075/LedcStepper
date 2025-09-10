@@ -26,6 +26,7 @@ public:
 private:
     static uint8_t _next_timer_channel;
     static SemaphoreHandle_t _pcnt_mutex;
+    static bool _fade_func_installed;
     TaskHandle_t _task_to_notify_handle = NULL;
     TaskHandle_t _stop_task_handle;
     TaskHandle_t _wait_task_handle = NULL;

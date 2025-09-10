@@ -34,6 +34,7 @@ struct pcnt_chan_t
 
 uint8_t LedcStepper::_next_timer_channel = 0;
 SemaphoreHandle_t LedcStepper::_pcnt_mutex = xSemaphoreCreateMutex();
+bool LedcStepper::_fade_func_installed = false;
 
 #define HALF_DUTY 128
 
@@ -91,7 +92,10 @@ LedcStepper::LedcStepper(uint8_t step_pin, uint8_t dir_pin, uint8_t en_pin, bool
         .flags = {.output_invert = 1}};
     ledc_channel_config(&ledc_channel);
 
-    ledc_fade_func_install(0);
+    if (!_fade_func_installed) {
+        ledc_fade_func_install(0);
+        _fade_func_installed = true;
+    }
 
     pcnt_unit_config_t unit_config = {
         .low_limit = PCNT_LOW_LIMIT,
