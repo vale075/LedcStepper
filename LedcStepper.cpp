@@ -92,7 +92,8 @@ LedcStepper::LedcStepper(uint8_t step_pin, uint8_t dir_pin, uint8_t en_pin, bool
         .flags = {.output_invert = 1}};
     ledc_channel_config(&ledc_channel);
 
-    if (!_fade_func_installed) {
+    if (!_fade_func_installed)
+    {
         ledc_fade_func_install(0);
         _fade_func_installed = true;
     }
@@ -214,7 +215,7 @@ void LedcStepper::step(int32_t position, uint32_t speed, bool wait, bool reset)
             ESP_LOGI(TAG, "waiting");
             xTaskNotifyWait(0x00, ULONG_MAX, NULL, portMAX_DELAY);
             ESP_LOGI(TAG, "stopped waiting");
-            stop();
+            stop(true, true);
             ESP_LOGI(TAG, "stopped ledc output");
         } while (_running);
     }
@@ -254,34 +255,30 @@ void LedcStepper::step_speed(int32_t speed)
     vTaskPrioritySet(NULL, prvPriority);
 }
 
-void LedcStepper::stop(bool stop_waiting, bool from_ISR)
+void LedcStepper::stop(bool stop_waiting, bool from_ISR) // ISSUE : the stop_waiting mechanism does not work for goto wait
 {
-    xSemaphoreTake(_pcnt_mutex, portMAX_DELAY);
     UBaseType_t prvPriority = uxTaskPriorityGet(NULL);
     vTaskPrioritySet(NULL, _task_stop_priority);
+    xSemaphoreTake(_pcnt_mutex, portMAX_DELAY);
 
-    ledc_set_duty_and_update(LEDC_LOW_SPEED_MODE, _channel, 0, 0);
-    _running = false;
+    if ((_pcnt_watch_point && _pcnt_watch_point == _pcnt_objective) || !from_ISR)
+    {
+        ledc_set_duty_and_update(LEDC_LOW_SPEED_MODE, _channel, 0, 0);
+        _running = false;
+    } // else because counter overflown while speed target
     ESP_LOGI(TAG, "Calling stop() - _pcnt_unit: %p, group: %p", _pcnt_unit, _pcnt_unit->group);
     int count;
     pcnt_unit_get_count(_pcnt_unit, &count);
     pcnt_unit_clear_count(_pcnt_unit);
     _position += count;
-    ESP_LOGI(TAG, "Stopping - count:%d, position:%d, pcntwatchpoint:%d, pcn_objective:%d", count, _position, _pcnt_watch_point, _pcnt_objective);
-
-    // because counter overflown while speed target
-    if (!_pcnt_watch_point && from_ISR)
-    {
-        _running = true;
-        ledc_set_duty_and_update(LEDC_LOW_SPEED_MODE, _channel, HALF_DUTY, 0);
-    }
+    ESP_LOGI(TAG, "Stopping - count:%d, position:%d, pcntwatchpoint:%d, pcnt_objective:%d", count, _position, _pcnt_watch_point, _pcnt_objective);
 
     if (_pcnt_watch_point)
     {
         // account for possible overflow
         if (_pcnt_watch_point != PCNT_HIGH_LIMIT && _pcnt_watch_point != PCNT_LOW_LIMIT)
             pcnt_unit_remove_watch_point(_pcnt_unit, _pcnt_watch_point);
-        if (!(_pcnt_watch_point == _pcnt_objective))
+        if (!(_pcnt_watch_point == _pcnt_objective) && from_ISR)
         {
             _pcnt_objective -= _pcnt_watch_point;
             if (_pcnt_objective > 0)
@@ -292,10 +289,10 @@ void LedcStepper::stop(bool stop_waiting, bool from_ISR)
             if (_pcnt_watch_point != PCNT_HIGH_LIMIT && _pcnt_watch_point != PCNT_LOW_LIMIT)
             {
                 pcnt_unit_add_watch_point(_pcnt_unit, _pcnt_watch_point);
-                pcnt_unit_clear_count(_pcnt_unit);
+                // pcnt_unit_get_count(_pcnt_unit, &count);
+                pcnt_unit_clear_count(_pcnt_unit); // necessary to apply the watch point
+                // Warning : We might loose a couple steps between the two clear_counts !
             }
-            _running = true;
-            ledc_set_duty_and_update(LEDC_LOW_SPEED_MODE, _channel, HALF_DUTY, 0);
             vTaskPrioritySet(NULL, prvPriority);
             xSemaphoreGive(_pcnt_mutex);
             return;
@@ -306,8 +303,8 @@ void LedcStepper::stop(bool stop_waiting, bool from_ISR)
     {
         xTaskNotifyGive(_wait_task_handle);
     }
-    vTaskPrioritySet(NULL, prvPriority);
     xSemaphoreGive(_pcnt_mutex);
+    vTaskPrioritySet(NULL, prvPriority);
 }
 
 void LedcStepper::wait()
@@ -316,7 +313,8 @@ void LedcStepper::wait()
     {
         _wait_task_handle = xTaskGetCurrentTaskHandle();
         _waiting = true;
-        xTaskNotifyWait(0x00, ULONG_MAX, NULL, portMAX_DELAY);
+        if (_running) // make sure we are still running and it did not change at the wrong time
+            xTaskNotifyWait(0x00, ULONG_MAX, NULL, portMAX_DELAY);
         _waiting = false;
     }
 }
@@ -343,8 +341,8 @@ int LedcStepper::get_position()
 {
     if (_running)
     {
+        int count;
         xSemaphoreTake(_pcnt_mutex, portMAX_DELAY);
-        int count = 0;
         pcnt_unit_get_count(_pcnt_unit, &count);
         xSemaphoreGive(_pcnt_mutex);
         return _position + count;
